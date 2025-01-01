@@ -10,8 +10,6 @@
 #include <stdint.h>
 
 #define CPU_INPUT
-//#define OUTPUT_BUFFER
-#define OUTPUT_MNEMONIC
 
 typedef struct _BREAKPOINT {
 	bool set;

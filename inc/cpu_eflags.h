@@ -9,18 +9,18 @@
 #include "type_defs.h"
 
 typedef struct _X86_EFLAGS {
-	BYTE CF : 1;
+	BYTE CF : 1; // carry flag
 	BYTE REV1 : 1;
-	BYTE PF : 1;
+	BYTE PF : 1; // parity flag
 	BYTE REV2 : 1;
-	BYTE AF : 1;
+	BYTE AF : 1; // AUX flag
 	BYTE REV3 : 1;
-	BYTE ZF : 1;
-	BYTE SF : 1;
-	BYTE TF : 1;
+	BYTE ZF : 1; // zero flag
+	BYTE SF : 1; // sign flag
+	BYTE TF : 1; // trap flag
 	BYTE IF : 1;
-	BYTE DF : 1;
-	BYTE OF : 1;
+	BYTE DF : 1; // direction flag
+	BYTE OF : 1; // overflow flag
 	BYTE IOPL : 2;
 	BYTE NT : 1;
 	BYTE REV4 : 1;

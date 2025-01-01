@@ -14,13 +14,13 @@
 #endif
 
 #include "cpu.h"
-
-extern X86_CPU cpu;
-extern BREAKPOINT cpu_breakpoint;
-extern char* output_buffer;
-void flush_output_buffer();
+#include "cpu_memory.h"
 
 #ifdef CPU_INPUT
+extern X86_CPU cpu;
+extern BREAKPOINT* cpu_breakpoint;
+extern uint32_t cpu_breakpoint_index;
+extern uint32_t cpu_breakpoint_count;
 int kb_frames = 0;
 #endif
 
@@ -151,28 +151,19 @@ int input()
 			if (ch[0] == '\0')
 				break;
 
-			if (strcmp("off", ch) == 0) {
-				cpu_breakpoint.set = false;
-				printf("Breakpoint OFF\n");
-			}
-			else if (strcmp("on", ch) == 0) {
-				cpu_breakpoint.set = true;
-				printf("Breakpoint ON %08x\n", cpu_breakpoint.address);
-			}
-			else
-			{
-				if (ch[0] == '-' || ch[0] == '+')
-					rel = 1;
+			if (ch[0] == '-' || ch[0] == '+')
+				rel = 1;
 
-				get_num(ch, &address);
+			get_num(ch, &address);
 
-				if (rel)
-					address += cpu.eip;
+			if (rel)
+				address += cpu.eip;
 
-				cpu_breakpoint.set = true;
-				cpu_breakpoint.address = address;
-				printf("Breakpoint ON %08x\n", cpu_breakpoint.address);
-			}
+			cpu_breakpoint[cpu_breakpoint_index].set = true;
+			cpu_breakpoint[cpu_breakpoint_index].address = address;
+			printf("Breakpoint ON %08x\n", cpu_breakpoint[cpu_breakpoint_index].address);
+			cpu_breakpoint_index++;
+
 
 			printf("\t%08x: ", cpu.eip);
 		} break;
@@ -180,43 +171,30 @@ int input()
 
 	return 0;
 }
-void single_step() {
-	if (cpu.eflags.TF == 1) {
-		if (cpu.output_str[0] != '\0')
-			printf("%s\n\t%08x: ", cpu.output_str, cpu.eip);
-		else
-			printf("\n\t%08x: ", cpu.eip);
-	}
-}
 #endif
 
 int input_loop()
 {
-#ifndef OUTPUT_MNEMONIC
-	single_step();
-#endif
-
+#ifdef CPU_INPUT
 	do {
 		if (input() != 0)
 			break;
 
-#ifdef OUTPUT_BUFFER
-		if (cpu.eflags.TF == 1) {
-			flush_output_buffer();
-		}
-#endif
-
-		if (cpu_breakpoint.set && cpu.eflags.TF == 0) {
-			if (cpu_breakpoint.address == cpu.eip) {
-				cpu.eflags.TF = 1;
-#ifdef OUTPUT_BUFFER
-				sprintf(output_buffer+strlen(output_buffer), "Breakpoint hit\n\t%08x: ", cpu.eip);
-#else
-				printf("Breakpoint hit\n\t%08x: ", cpu.eip);
-#endif
+		if (cpu.eflags.TF == 0) {
+			for (uint32_t i = 0; i < cpu_breakpoint_index; ++i) {
+				if (cpu_breakpoint[i].set) {
+					uint32_t address = x86GetEffectiveAddress(&cpu, cpu.eip);
+					if (cpu_breakpoint[i].address == address) {
+						cpu.eflags.TF = 1;
+						printf("Breakpoint hit\n\t%08x: ", address);
+					}
+				}
 			}
 		}
 	} while (cpu.eflags.TF == 1 && cpu.hlt == 0);
 
 	return cpu.hlt;
+#else
+	return 0;
+#endif
 }

@@ -4,20 +4,44 @@
 // GitHub: https:\\github.com\tommojphillips
 
 #include <string.h>
+#include <stdint.h>
+
 #include "cpu.h"
+#include "cpu_sib.h"
+#include "cpu_memory.h"
 
-void get_sib_displ_reg_reg_mnemonic(char* buf, int32_t displacement, uint32_t address_size, uint32_t reg, uint32_t reg2, uint32_t scale)
+uint32_t get_16bit_indirect_address(X86_CPU* cpu, X86_MOD_RM_BITS* mode)
 {
-	MNEMONIC_REG((buf, "[%s", reg, address_size));
-	MNEMONIC_REG((buf + strlen(buf), "+%s", reg2, address_size));
-	sprintf(buf + strlen(buf), "*%x", scale);
-
-	if (displacement < 0)
-		sprintf(buf + strlen(buf), "%d]", displacement);
-	else
-		sprintf(buf + strlen(buf), "+%d]", displacement);
+	uint32_t addr = 0;
+	switch (mode->rm) {
+		case 0b000: // [ BX + SI ]
+			addr = x86CPUGetRegister(cpu, REG_BX, 2);
+			addr += x86CPUGetRegister(cpu, REG_SI, 2);
+			break;
+		case 0b001: // [ BX + DI ]
+			addr = x86CPUGetRegister(cpu, REG_BX, 2);
+			addr += x86CPUGetRegister(cpu, REG_DI, 2);
+			break;
+		case 0b010: // [ BP + SI ]
+			addr = x86CPUGetRegister(cpu, REG_BP, 2);
+			addr += x86CPUGetRegister(cpu, REG_SI, 2);
+			break;
+		case 0b011: // [ BP + DI ]
+			addr = x86CPUGetRegister(cpu, REG_BP, 2);
+			addr += x86CPUGetRegister(cpu, REG_DI, 2);
+			break;
+		case 0b100: // [ SI ]
+			addr = x86CPUGetRegister(cpu, REG_SI, 2);
+			break;
+		case 0b101: // [ DI ]
+			addr = x86CPUGetRegister(cpu, REG_DI, 2);
+			break;
+		case 0b111: // [ BX ]
+			addr = x86CPUGetRegister(cpu, REG_BX, 2);
+			break;
+	}
+	return addr;
 }
-
 uint32_t get_sib_scale(BYTE scale)
 {
 	switch (scale) {
@@ -33,239 +57,274 @@ uint32_t get_sib_scale(BYTE scale)
 	return 1;
 }
 
-int addressing_mode_reg_ptr(X86_CPU* cpu, uint32_t reg, uint32_t operand_size, uint32_t* address, uint32_t* value, INSTRUCTION_RM* type)
+int addressing_mode_reg(X86_CPU* cpu, X86_MOD_RM_BITS* mode, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state)
+{
+	// 8/16/32 reg
+	if (state != NULL) {
+		state->value = x86CPUGetRegister(cpu, mode->rm, operand_size);
+		state->type = INSTRUCTION_RM_REGISTER;
+	}
+	return 0;
+}
+int addressing_mode_disp(X86_CPU* cpu, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state, uint32_t* counter)
+{
+	// disp16/32 - displacement only addressing mode
+	uint32_t disp = x86CPUFetchMemory(cpu, operand_size, counter);
+
+	if (state != NULL) {
+		state->address = disp;
+		state->value = x86CPUReadMemory(cpu, disp, operand_size);
+		state->type = INSTRUCTION_RM_INDIRECT;
+	}
+	return 0;
+}
+int addressing_mode_32bit(X86_CPU* cpu, X86_MOD_RM_BITS* mode, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state)
 {
 	// [reg]
-	uint32_t addr = x86CPUGetRegister(cpu, reg, 4); // ptr is 4 bytes.
-	uint32_t val = x86CPUReadMemory(cpu, addr, operand_size);
-	if (address != NULL)
-		*address = addr;
-	if (value != NULL)
-		*value = val;
-	if (type != NULL)
-		*type = INSTRUCTION_RM_MEM;
-	MNEMONIC_REG((cpu->addressing_str, "[%s]", reg, 4)); // ptr is 4 bytes.
+	uint32_t addr = x86CPUGetRegister(cpu, mode->rm, 4);
+
+	if (state != NULL) {
+		state->address = addr;
+		state->value = x86CPUReadMemory(cpu, addr, operand_size);
+		state->type = INSTRUCTION_RM_INDIRECT;
+	}
 	return 0;
 }
-int addressing_mode_reg(X86_CPU* cpu, X86_MOD_RM* mode, uint32_t operand_size, uint32_t* value, INSTRUCTION_RM* type)
+int addressing_mode_32bit_disp(X86_CPU* cpu, X86_MOD_RM_BITS* mode, uint32_t displacement_size, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state, uint32_t* counter)
 {
-	// reg
-	if (value != NULL)
-		*value = x86CPUGetRegister(cpu, mode->rm, operand_size);
-	if (type != NULL)
-		*type = INSTRUCTION_RM_REG;
-	MNEMONIC_REG((cpu->addressing_str, "%s", mode->rm, operand_size));
-	return 0;
-}
-int addressing_mode_reg_ptr_disp(X86_CPU* cpu, X86_MOD_RM* mode, uint32_t displacement_size, uint32_t operand_size, uint32_t* address, uint32_t* value, INSTRUCTION_RM* type, uint32_t* counter)
-{
-	// [reg+disp]
+	// [reg32 + disp8/32]
 	uint32_t reg = mode->rm;
-	uint32_t reg_v = x86CPUGetRegister(cpu, reg, operand_size);
+	uint32_t reg_v = x86CPUGetRegister(cpu, reg, 4);
 	uint32_t displacement = x86CPUFetchMemory(cpu, displacement_size, counter);
 	uint32_t addr = reg_v + displacement;
 
-	if (address != NULL)
-		*address = addr;
-	if (value != NULL)
-		*value = x86CPUReadMemory(cpu, addr, operand_size);
-	if (type != NULL)
-		*type = INSTRUCTION_RM_MEM;
-
-	MNEMONIC_REG((cpu->addressing_str, "[%s", reg, operand_size));
-	MNEMONIC_STR((cpu->addressing_str + strlen(cpu->addressing_str), "+0x%x]", displacement));
+	if (state != NULL) {
+		state->address = addr;
+		state->value = x86CPUReadMemory(cpu, addr, operand_size);
+		state->type = INSTRUCTION_RM_INDIRECT;
+	}
 	return 0;
 }
-int addressing_mode_sib_reg_reg_disp8(X86_CPU* cpu, uint32_t address_size, uint32_t operand_size, uint32_t* address, uint32_t* value, INSTRUCTION_RM* type, uint32_t* counter)
+int addressing_mode_16bit(X86_CPU* cpu, X86_MOD_RM_BITS* mode, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state)
 {
-	// SIB + disp8 -> [ disp8 + reg + reg * n ]
+	// [reg16 + reg16]
+
+	uint32_t addr = get_16bit_indirect_address(cpu, mode);
+
+	if (state != NULL) {
+		state->address = addr;
+		state->value = x86CPUReadMemory(cpu, addr, operand_size);
+		state->type = INSTRUCTION_RM_INDIRECT;
+	}
+	return 0;
+}
+int addressing_mode_16bit_disp(X86_CPU* cpu, X86_MOD_RM_BITS* mode, uint32_t displacement_size, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state, uint32_t* counter)
+{
+	// [reg16 + reg16 + disp8/16]
+	uint32_t displacement = x86CPUFetchMemory(cpu, displacement_size, counter);
+	uint32_t addr = get_16bit_indirect_address(cpu, mode);
+	addr += displacement;
+	
+	if (state != NULL) {
+		state->address = addr;
+		state->value = x86CPUReadMemory(cpu, addr, operand_size);
+		state->type = INSTRUCTION_RM_INDIRECT;
+	}
+	return 0;
+}
+int addressing_mode_sib_disp8(X86_CPU* cpu, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state, uint32_t* counter)
+{
+	// SIB + disp8
 
 	BYTE byte = x86CPUFetchByte(cpu, counter);
 	X86_SIB* sib = (X86_SIB*)&byte;
-	uint32_t scale = get_sib_scale(sib->scale);
-	uint32_t reg = sib->base;
-	uint32_t reg2 = sib->index;
-	uint32_t reg_v = x86CPUGetRegister(cpu, reg, address_size);
-	uint32_t reg2_v = x86CPUGetRegister(cpu, reg2, address_size);
-	int8_t displacement = (int8_t)x86CPUFetchByte(cpu, counter); // SIGNED	
-	uint32_t addr = displacement + reg_v + reg2_v * scale;
+	uint32_t base = x86CPUGetRegister(cpu, sib->base, 4);
+	signed char displacement = (int8_t)x86CPUFetchByte(cpu, counter);
 
-	if (address != NULL)
-		*address = addr;
-	if (value != NULL)
-		*value = x86CPUReadMemory(cpu, addr, operand_size);
-	if (type != NULL)
-		*type = INSTRUCTION_RM_MEM;
-	
-	get_sib_displ_reg_reg_mnemonic(cpu->addressing_str, displacement, address_size, reg, reg2, scale);
+	if (sib->index == 0b100) {
+		// SIB + disp8 -> [ base + disp8 ]
+		uint32_t addr = base + displacement;
+		if (state != NULL) {
+			state->address = addr;
+			state->value = x86CPUReadMemory(cpu, addr, operand_size);
+			state->type = INSTRUCTION_RM_INDIRECT;
+		}
+	}
+	else {
+		// SIB + disp8 -> [ base + (index * n) + disp8 ]
+		uint32_t scale = get_sib_scale(sib->scale);
+		uint32_t index = x86CPUGetRegister(cpu, sib->index, 4);
+		uint32_t addr = base + (index * scale) + displacement;
+		if (state != NULL) {
+			state->address = addr;
+			state->value = x86CPUReadMemory(cpu, addr, operand_size);
+			state->type = INSTRUCTION_RM_INDIRECT;
+		}
+	}
 	return 0;
 }
-int addressing_mode_sib_reg_reg_disp32(X86_CPU* cpu, uint32_t operand_size, uint32_t* address, uint32_t* value, INSTRUCTION_RM* type, uint32_t* counter)
+int addressing_mode_sib_disp32(X86_CPU* cpu, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state, uint32_t* counter)
 {
-	// SIB + disp32 -> [ disp32 + reg[8/32] + reg * n ]
+	// SIB + disp32
 
 	BYTE byte = x86CPUFetchByte(cpu, counter);
 	X86_SIB* sib = (X86_SIB*)&byte;
-	uint32_t scale = get_sib_scale(sib->scale);
-	uint32_t reg = sib->base;
-	uint32_t reg2 = sib->index;
-	uint32_t reg_v = x86CPUGetRegister(cpu, reg, operand_size);
-	uint32_t reg2_v = x86CPUGetRegister(cpu, reg2, operand_size);
-	int32_t displacement = (int32_t)x86CPUFetchDword(cpu, counter); // SIGNED
-	uint32_t addr = displacement + reg_v + reg2_v * scale;
-	if (address != NULL)
-		*address = addr;
-	if (value != NULL)
-		*value = x86CPUReadMemory(cpu, addr, operand_size);
-	if (type != NULL)
-		*type = INSTRUCTION_RM_MEM;
-	
-	get_sib_displ_reg_reg_mnemonic(cpu->addressing_str, displacement, operand_size, reg, reg2, scale);
+	uint32_t base = x86CPUGetRegister(cpu, sib->base, 4);
+	int displacement = (int)x86CPUFetchDword(cpu, counter);
+
+	if (sib->index == 0b100) {
+		// SIB + disp32 -> [ base + disp32 ]
+		uint32_t addr = base + displacement;
+		if (state != NULL) {
+			state->address = addr;
+			state->value = x86CPUReadMemory(cpu, addr, operand_size);
+			state->type = INSTRUCTION_RM_INDIRECT;
+		}
+	}
+	else {
+		// SIB + disp32 -> [ base + (index * n) + disp32 ]
+		uint32_t scale = get_sib_scale(sib->scale);
+		uint32_t index = x86CPUGetRegister(cpu, sib->index, 4);
+		uint32_t addr = base + (index * scale) + displacement;
+		if (state != NULL) {
+			state->address = addr;
+			state->value = x86CPUReadMemory(cpu, addr, operand_size);
+			state->type = INSTRUCTION_RM_INDIRECT;
+		}
+	}
 	return 0;
 }
-int addressing_mode_sib_reg_reg(X86_CPU* cpu, uint32_t displacement_size, uint32_t operand_size, uint32_t* address, uint32_t* value, INSTRUCTION_RM* type, uint32_t* counter)
+int addressing_mode_sib(X86_CPU* cpu, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state, uint32_t* counter)
 {
-	// SIB -> [ reg[8/32] + reg * n ]
-
-	BYTE byte = x86CPUFetchByte(cpu, counter);
-	X86_SIB* sib = (X86_SIB*)&byte;
-	uint32_t scale = get_sib_scale(sib->scale);
-	uint32_t reg = sib->base;
-	uint32_t reg2 = sib->index;
-	uint32_t reg_v = x86CPUGetRegister(cpu, reg, displacement_size);
-	uint32_t reg2_v = x86CPUGetRegister(cpu, reg2, operand_size);
-	uint32_t addr = reg_v + reg2_v * scale;
-	
-	if (address != NULL)
-		*address = addr;
-	if (value != NULL)
-		*value = x86CPUReadMemory(cpu, addr, operand_size);
-	if (type != NULL)
-		*type = INSTRUCTION_RM_MEM;
-
-	MNEMONIC_REG((cpu->addressing_str, "[%s", reg, operand_size));
-	MNEMONIC_REG((cpu->addressing_str + strlen(cpu->addressing_str), "+%s", reg2, operand_size));
-	MNEMONIC_STR((cpu->addressing_str + strlen(cpu->addressing_str), "*%x]", scale));
-	return 0;
-}
-int addressing_mode_sib_disp(X86_CPU* cpu, uint32_t address_size, uint32_t operand_size, uint32_t* address, uint32_t* value, INSTRUCTION_RM* type, uint32_t* counter)
-{
-	// SIB mode -> [ disp32 + reg * n ]
+	// SIB mode
 
 	BYTE byte = x86CPUFetchByte(cpu, counter);
 	X86_SIB* sib = (X86_SIB*)&byte;
 	BYTE scale = get_sib_scale(sib->scale);
-	uint32_t reg = sib->index;
-	uint32_t reg_v = x86CPUGetRegister(cpu, reg, address_size);
+	uint32_t index = x86CPUGetRegister(cpu, sib->index, 4);
 
-	if (address_size != 2) {
-		address_size = 4;
-	}
+	if (sib->index == 0b100) {
+		if (sib->base == 0b101) {
+			// [ disp32 ]
+			DWORD disp32 = x86CPUFetchDword(cpu, counter);
+			uint32_t addr = disp32;
 
-	if (sib->base == 0b101) {
-		// [ disp + reg * n ]
-		DWORD disp32 = x86CPUFetchDword(cpu, counter);
-		uint32_t addr = disp32 + reg_v * scale;
+			if (state != NULL) {
+				state->address = addr;
+				state->value = x86CPUReadMemory(cpu, addr, operand_size);
+				state->type = INSTRUCTION_RM_INDIRECT;
+			}
+		}
+		else {
+			// [ base ]
+			uint32_t base = x86CPUGetRegister(cpu, sib->base, 4);
+			uint32_t addr = base;
 
-		if (address != NULL)
-			*address = addr;
-		if (value != NULL)
-			*value = x86CPUReadMemory(cpu, addr, operand_size);
-		if (type != NULL)
-			*type = INSTRUCTION_RM_MEM;
-
-		MNEMONIC_STR((cpu->addressing_str, "[0x%x", disp32));
+			if (state != NULL) {
+				state->address = addr;
+				state->value = x86CPUReadMemory(cpu, addr, operand_size);
+				state->type = INSTRUCTION_RM_INDIRECT;
+			}
+		}
 	}
 	else {
-		// [ reg + reg * n ]
-		uint32_t reg2 = sib->base;
-		uint32_t reg2_v = x86CPUGetRegister(cpu, reg2, address_size);
-		uint32_t addr = reg_v + reg2_v * scale;
-		if (address != NULL)
-			*address = addr;
-		if (value != NULL)
-			*value = x86CPUReadMemory(cpu, addr, operand_size);
-		if (type != NULL)
-			*type = INSTRUCTION_RM_MEM;
+		if (sib->base == 0b101) {
+			// [ (index * n) + disp32 ]
+			DWORD disp32 = x86CPUFetchDword(cpu, counter);
+			uint32_t addr = (index * scale) + disp32;
 
-		MNEMONIC_REG((cpu->addressing_str, "[%s", reg2, address_size));
+			if (state != NULL) {
+				state->address = addr;
+				state->value = x86CPUReadMemory(cpu, addr, operand_size);
+				state->type = INSTRUCTION_RM_INDIRECT;
+			}
+		}
+		else {
+			// [ base + (index * n) ]
+			uint32_t base = x86CPUGetRegister(cpu, sib->base, 4);
+			uint32_t addr = base + (index * scale);
+
+			if (state != NULL) {
+				state->address = addr;
+				state->value = x86CPUReadMemory(cpu, addr, operand_size);
+				state->type = INSTRUCTION_RM_INDIRECT;
+			}
+		}
 	}
 
-	MNEMONIC_REG((cpu->addressing_str + strlen(cpu->addressing_str), "+%s", reg, address_size));
-	MNEMONIC_STR((cpu->addressing_str + strlen(cpu->addressing_str), "*%x]", scale));
-
-	return 0;
-}
-int addressing_mode_disp32(X86_CPU* cpu, uint32_t* address, uint32_t* value, INSTRUCTION_RM* type, uint32_t* counter)
-{
-	// disp32 - displacement only addressing mode
-	DWORD disp32 = x86CPUFetchDword(cpu, counter);
-	uint32_t addr = disp32;
-
-	if (address != NULL)
-		*address = addr;
-	if (value != NULL)
-		*value = x86CPUReadMemory(cpu, addr, 4);
-	if (type != NULL)
-		*type = INSTRUCTION_RM_MEM;
-
-	MNEMONIC_STR((cpu->addressing_str, "[0x%x]", disp32));
 	return 0;
 }
 
-int get_addressing_mode(X86_CPU* cpu, X86_MOD_RM* mode, uint32_t address_size, uint32_t operand_size, uint32_t* address, uint32_t* value, INSTRUCTION_TYPE* type, uint32_t* counter)
+int get_addressing_mode(X86_CPU* cpu, X86_MOD_RM_BITS* mode, uint32_t address_size, uint32_t operand_size, ADDRESSING_MODE_FIELD_STRUCT* state, uint32_t* counter)
 {
 	// figure out the addressing mode.
 
 	switch (mode->mod) {
+
 		case 0b00: {
-			if (mode->rm == 0b100) {
-				// SIB mode -> [ disp32 + reg * n ]
-				addressing_mode_sib_disp(cpu, address_size, operand_size, address, value, type, counter);
-			}
-			else if (mode->rm == 0b101) {
-				// disp32 - displacement only addressing mode
-				addressing_mode_disp32(cpu, address, value, type, counter);
+			if (address_size == 4) {
+				if (mode->rm == 0b100) {
+					// [ SIB ]
+					addressing_mode_sib(cpu, operand_size, state, counter);
+				}
+				else if (mode->rm == 0b101) {
+					// [ disp32 ]
+					addressing_mode_disp(cpu, 4, state, counter);
+				}
+				else {
+					// [ reg32 ]
+					addressing_mode_32bit(cpu, mode, 4, state);
+				}
 			}
 			else {
-				// [reg]
-				addressing_mode_reg_ptr(cpu, mode->rm, 4, address, value, type);
+				if (mode->rm == 0b110) {
+					// [ disp16 ]
+					addressing_mode_disp(cpu, 2, state, counter);
+				}
+				else {
+					// [ reg16 + reg16 ]
+					addressing_mode_16bit(cpu, mode, 4, state);
+				}
 			}
-
 		} break;
 
 		case 0b01: {
-			// 1 byte displacement
-			if (mode->rm == 0b100) {
-				// SIB + disp8 -> [ disp8 + reg8 + reg * n ]
-				addressing_mode_sib_reg_reg_disp8(cpu, address_size, operand_size, address, value, type, counter);
+			if (address_size == 4) {
+				if (mode->rm == 0b100) {
+					// [ SIB + disp8 ]
+					addressing_mode_sib_disp8(cpu, operand_size, state, counter);
+				}
+				else {
+					// [ reg32 + disp8 ]
+					addressing_mode_32bit_disp(cpu, mode, 1, operand_size, state, counter);
+				}
 			}
-			else /*if (mode->rm == 0b110)*/ {
-				// [reg+disp8]
-				addressing_mode_reg_ptr_disp(cpu, mode, 1, operand_size, address, value, type, counter);
+			else {
+				// [ reg16 + reg16 + disp8 ]
+				addressing_mode_16bit_disp(cpu, mode, 1, operand_size, state, counter);
 			}
-
 		} break;
 
 		case 0b10: {
-			// 4 byte displacement
-			if (mode->rm == 0b100) {
-				// SIB + disp32 -> [ disp32 + reg32 + reg * n ]
-				addressing_mode_sib_reg_reg_disp32(cpu, operand_size, address, value, type, counter);
+			if (address_size == 4) {
+				if (mode->rm == 0b100) {
+					// [ SIB + disp32 ]
+					addressing_mode_sib_disp32(cpu, operand_size, state, counter);
+				}
+				else {
+					// [ reg32 + disp32 ]
+					addressing_mode_32bit_disp(cpu, mode, 4, operand_size, state, counter);
+				}
 			}
-			else if (mode->rm == 0b101) {
-				// [reg+disp32]
-				addressing_mode_reg_ptr_disp(cpu, mode, 4, operand_size, address, value, type, counter);
-			}
-			else /*if (mode->rm == 0b110)*/ {
-				// [reg+disp32]
-				addressing_mode_reg_ptr_disp(cpu, mode, 4, 4, address, value, type, counter);
+			else {
+				// [ reg16 + reg16 + disp16 ]
+				addressing_mode_16bit_disp(cpu, mode, 2, operand_size, state, counter);
 			}
 		} break;
 
 		case 0b11: {
 			// reg
-			addressing_mode_reg(cpu, mode, operand_size, value, type);
+			addressing_mode_reg(cpu, mode, operand_size, state);
 		} break;
 	}
 	return 0;

@@ -11,17 +11,31 @@
 #include "type_defs.h"
 
 // opcode byte
-typedef struct _X86_OPCODE {
+typedef struct _X86_OPCODE_BITS {
 	BYTE size		: 1;
 	BYTE direction	: 1;
 	BYTE op			: 6;
+} X86_OPCODE_BITS;
+
+typedef struct _X86_OPCODE {
+	union {
+		X86_OPCODE_BITS bits;
+		BYTE byte;
+	};
 } X86_OPCODE;
 
 // r/m byte
-typedef struct _X86_MOD_RM {
+typedef struct _X86_MOD_RM_BITS {
 	BYTE rm		: 3;
 	BYTE reg	: 3;
 	BYTE mod	: 2;
+} X86_MOD_RM_BITS;
+
+typedef struct _X86_MOD_RM {
+	union {
+		X86_MOD_RM_BITS bits;
+		BYTE byte;
+	};
 } X86_MOD_RM;
 
 // sib byte
@@ -62,12 +76,14 @@ typedef enum _INSTRUCTION_TYPE {
 	INSTRUCTION_TYPE_CMP,
 	INSTRUCTION_TYPE_INC,
 	INSTRUCTION_TYPE_DEC,
+	INSTRUCTION_TYPE_SBB,
+	INSTRUCTION_TYPE_ADC
 } INSTRUCTION_TYPE;
 
 typedef enum _INSTRUCTION_RM {
 	INSTRUCTION_RM_UNK,
-	INSTRUCTION_RM_REG,
-	INSTRUCTION_RM_MEM,
+	INSTRUCTION_RM_REGISTER,
+	INSTRUCTION_RM_INDIRECT,
 	INSTRUCTION_RM_IMM,
 } INSTRUCTION_RM;
 
